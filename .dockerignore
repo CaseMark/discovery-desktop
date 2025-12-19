@@ -1,0 +1,29 @@
+# Dependencies
+node_modules
+
+# Build outputs (we build fresh in container)
+.next
+out
+
+# Development files
+*.log
+.env*.local
+.DS_Store
+
+# Database files (should not be in container image)
+*.db
+*.db-shm
+*.db-wal
+
+# IDE
+.vscode
+.idea
+
+# Git
+.git
+.gitignore
+
+# Docker
+Dockerfile*
+docker-compose*
+
