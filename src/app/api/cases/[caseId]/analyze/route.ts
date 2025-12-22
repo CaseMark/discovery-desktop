@@ -2,14 +2,50 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db, cases, documents } from '@/lib/db';
 import { getCasedevClient } from '@/lib/casedev/client';
 import { eq, and } from 'drizzle-orm';
+import { requireAuth, isPasswordlessCase } from '@/lib/auth';
+import { checkApiRateLimit } from '@/lib/rate-limit';
 
-// POST /api/cases/[caseId]/analyze - Generate AI tags and summary for a discovery
+// Helper to check auth for a case
+async function checkCaseAuth(caseId: string): Promise<NextResponse | null> {
+  const caseCheck = await db
+    .select({ passwordHash: cases.passwordHash })
+    .from(cases)
+    .where(eq(cases.id, caseId))
+    .limit(1);
+
+  if (caseCheck.length === 0) {
+    return NextResponse.json(
+      { error: 'Case not found' },
+      { status: 404 }
+    );
+  }
+
+  // Require authentication unless case is passwordless
+  if (!isPasswordlessCase(caseCheck[0].passwordHash)) {
+    const authError = await requireAuth(caseId);
+    if (authError) return authError;
+  }
+
+  return null;
+}
+
+// POST /api/cases/[caseId]/analyze - Generate AI tags and summary for a discovery (requires authentication)
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ caseId: string }> }
 ) {
   try {
     const { caseId } = await params;
+
+    // Rate limit check
+    const rateLimitResponse = checkApiRateLimit(request, `analyze:${caseId}`);
+    if (rateLimitResponse) {
+      return rateLimitResponse;
+    }
+
+    // Check authentication
+    const authError = await checkCaseAuth(caseId);
+    if (authError) return authError;
 
     // Get the case
     const caseData = await db
@@ -160,13 +196,23 @@ ${combinedText}`
   }
 }
 
-// GET /api/cases/[caseId]/analyze - Get current tags and summary
+// GET /api/cases/[caseId]/analyze - Get current tags and summary (requires authentication)
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ caseId: string }> }
 ) {
   try {
     const { caseId } = await params;
+
+    // Rate limit check
+    const rateLimitResponse = checkApiRateLimit(request, `analyze:${caseId}:get`);
+    if (rateLimitResponse) {
+      return rateLimitResponse;
+    }
+
+    // Check authentication
+    const authError = await checkCaseAuth(caseId);
+    if (authError) return authError;
 
     const caseData = await db
       .select({

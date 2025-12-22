@@ -2,15 +2,43 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db, documents, cases } from '@/lib/db';
 import { getCasedevClient } from '@/lib/casedev/client';
 import { eq, and, inArray } from 'drizzle-orm';
+import { requireAuth, isPasswordlessCase } from '@/lib/auth';
+import { checkApiRateLimit } from '@/lib/rate-limit';
 
-// POST /api/cases/[caseId]/documents/confirm - Batch confirm uploads
-// More efficient than confirming one at a time
+// POST /api/cases/[caseId]/documents/confirm - Batch confirm uploads (requires authentication)
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ caseId: string }> }
 ) {
   try {
     const { caseId } = await params;
+
+    // Rate limit check
+    const rateLimitResponse = checkApiRateLimit(request, `docs:${caseId}:confirm`);
+    if (rateLimitResponse) {
+      return rateLimitResponse;
+    }
+
+    // Check authentication
+    const caseCheck = await db
+      .select({ passwordHash: cases.passwordHash })
+      .from(cases)
+      .where(eq(cases.id, caseId))
+      .limit(1);
+
+    if (caseCheck.length === 0) {
+      return NextResponse.json(
+        { error: 'Case not found' },
+        { status: 404 }
+      );
+    }
+
+    // Require authentication unless case is passwordless
+    if (!isPasswordlessCase(caseCheck[0].passwordHash)) {
+      const authError = await requireAuth(caseId);
+      if (authError) return authError;
+    }
+
     const body = await request.json();
     const { documentIds } = body as { documentIds: string[] };
 
@@ -103,8 +131,6 @@ export async function POST(
             success: true,
             workflowId: result.workflowId,
           });
-          
-          console.log(`[Batch Ingest] Triggered for ${doc.filename}`);
         } catch (err) {
           const errorMessage = err instanceof Error ? err.message : String(err);
           
@@ -155,4 +181,3 @@ export async function POST(
     );
   }
 }
-

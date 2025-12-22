@@ -2,23 +2,50 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db, cases, documents } from '@/lib/db';
 import { getCasedevClient } from '@/lib/casedev/client';
 import { eq, and } from 'drizzle-orm';
+import { requireAuth, isPasswordlessCase } from '@/lib/auth';
+import { checkApiRateLimit } from '@/lib/rate-limit';
 
-// Status priority for determining if we should update local status
-const STATUS_PRIORITY: Record<string, number> = {
-  'pending': 1,
-  'uploading': 2,
-  'processing': 3,
-  'completed': 4,
-  'failed': 5,
-};
+// Helper to check auth for a case
+async function checkCaseAuth(caseId: string): Promise<NextResponse | null> {
+  const caseCheck = await db
+    .select({ passwordHash: cases.passwordHash })
+    .from(cases)
+    .where(eq(cases.id, caseId))
+    .limit(1);
 
-// PATCH /api/cases/[caseId]/documents/[documentId] - Retry ingestion for a single document
+  if (caseCheck.length === 0) {
+    return NextResponse.json(
+      { error: 'Case not found' },
+      { status: 404 }
+    );
+  }
+
+  // Require authentication unless case is passwordless
+  if (!isPasswordlessCase(caseCheck[0].passwordHash)) {
+    const authError = await requireAuth(caseId);
+    if (authError) return authError;
+  }
+
+  return null;
+}
+
+// PATCH /api/cases/[caseId]/documents/[documentId] - Retry ingestion for a single document (requires authentication)
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ caseId: string; documentId: string }> }
 ) {
   try {
     const { caseId, documentId } = await params;
+
+    // Rate limit check
+    const rateLimitResponse = checkApiRateLimit(request, `docs:${caseId}:${documentId}:retry`);
+    if (rateLimitResponse) {
+      return rateLimitResponse;
+    }
+
+    // Check authentication
+    const authError = await checkCaseAuth(caseId);
+    if (authError) return authError;
 
     // Get the document
     const doc = await db
@@ -51,8 +78,6 @@ export async function PATCH(
     // Trigger ingestion on Case.dev
     const client = getCasedevClient();
     const result = await client.vault.ingest(caseData[0].vaultId, doc[0].objectId);
-    
-    console.log(`[Retry] Triggered ingestion for ${doc[0].filename}: ${result.status}`);
 
     // Update local status to processing
     await db
@@ -75,13 +100,23 @@ export async function PATCH(
   }
 }
 
-// DELETE /api/cases/[caseId]/documents/[documentId] - Delete a document
+// DELETE /api/cases/[caseId]/documents/[documentId] - Delete a document (requires authentication)
 export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ caseId: string; documentId: string }> }
 ) {
   try {
     const { caseId, documentId } = await params;
+
+    // Rate limit check
+    const rateLimitResponse = checkApiRateLimit(request, `docs:${caseId}:${documentId}:delete`);
+    if (rateLimitResponse) {
+      return rateLimitResponse;
+    }
+
+    // Check authentication
+    const authError = await checkCaseAuth(caseId);
+    if (authError) return authError;
 
     // Get the document to verify it exists and get the objectId
     const doc = await db
@@ -116,10 +151,8 @@ export async function DELETE(
       try {
         const client = getCasedevClient();
         await client.vault.objects.delete(caseData[0].vaultId, doc[0].objectId);
-        console.log(`[Delete] Removed ${doc[0].filename} from Case.dev vault`);
       } catch (err) {
         // Log but continue - we still want to delete from local DB
-        // The object might not exist in the vault (e.g., upload failed)
         console.warn(`[Delete] Failed to delete from Case.dev vault:`, err);
       }
     }
@@ -128,8 +161,6 @@ export async function DELETE(
     await db
       .delete(documents)
       .where(eq(documents.id, documentId));
-
-    console.log(`[Delete] Removed ${doc[0].filename} from local database`);
 
     return NextResponse.json({
       success: true,
@@ -144,7 +175,7 @@ export async function DELETE(
   }
 }
 
-// GET /api/cases/[caseId]/documents/[documentId] - Get a single document
+// GET /api/cases/[caseId]/documents/[documentId] - Get a single document (requires authentication)
 // Query param: ?sync=true to force sync status with Case.dev
 export async function GET(
   request: NextRequest,
@@ -152,6 +183,17 @@ export async function GET(
 ) {
   try {
     const { caseId, documentId } = await params;
+
+    // Rate limit check
+    const rateLimitResponse = checkApiRateLimit(request, `docs:${caseId}:${documentId}:get`);
+    if (rateLimitResponse) {
+      return rateLimitResponse;
+    }
+
+    // Check authentication
+    const authError = await checkCaseAuth(caseId);
+    if (authError) return authError;
+
     const { searchParams } = new URL(request.url);
     const shouldSyncStatus = searchParams.get('sync') === 'true';
 
@@ -206,8 +248,6 @@ export async function GET(
               pageCount: vaultObject.pageCount || document.pageCount,
               sizeBytes: vaultObject.sizeBytes || document.sizeBytes,
             };
-            
-            console.log(`[Sync] Updated ${document.filename}: ${doc[0].ingestionStatus} → ${vaultObject.ingestionStatus}`);
           }
         }
       } catch (syncError) {

@@ -1,12 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db, appSettings } from '@/lib/db';
 import { eq } from 'drizzle-orm';
+import { checkApiRateLimit } from '@/lib/rate-limit';
 
 const SETTINGS_ID = 'default';
 
-// GET /api/settings - Get app settings
-export async function GET() {
+// GET /api/settings - Get app settings (public, rate limited)
+export async function GET(request: NextRequest) {
   try {
+    // Rate limit check
+    const rateLimitResponse = checkApiRateLimit(request, 'settings:get');
+    if (rateLimitResponse) {
+      return rateLimitResponse;
+    }
+
     const settings = await db
       .select()
       .from(appSettings)
@@ -40,11 +47,36 @@ export async function GET() {
   }
 }
 
-// PUT /api/settings - Update app settings
+// PUT /api/settings - Update app settings (rate limited, stricter limits)
+// Note: In a production environment, this should require admin authentication
+// For now, we apply strict rate limiting to prevent abuse
 export async function PUT(request: NextRequest) {
   try {
+    // Strict rate limit for settings updates (5 per minute)
+    const rateLimitResponse = checkApiRateLimit(request, 'settings:update');
+    if (rateLimitResponse) {
+      return rateLimitResponse;
+    }
+
     const body = await request.json();
     const { firmName, logoData, logoMimeType } = body;
+
+    // Validate logo data size (max 500KB base64)
+    if (logoData && logoData.length > 500 * 1024) {
+      return NextResponse.json(
+        { error: 'Logo image is too large. Maximum size is 500KB.' },
+        { status: 400 }
+      );
+    }
+
+    // Validate logo mime type
+    const allowedMimeTypes = ['image/png', 'image/jpeg', 'image/gif', 'image/svg+xml'];
+    if (logoMimeType && !allowedMimeTypes.includes(logoMimeType)) {
+      return NextResponse.json(
+        { error: 'Invalid logo format. Allowed formats: PNG, JPEG, GIF, SVG.' },
+        { status: 400 }
+      );
+    }
 
     const now = new Date();
 

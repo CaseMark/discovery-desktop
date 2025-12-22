@@ -2,14 +2,42 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db, cases, documents } from '@/lib/db';
 import { getCasedevClient } from '@/lib/casedev/client';
 import { eq, and } from 'drizzle-orm';
+import { requireAuth, isPasswordlessCase } from '@/lib/auth';
+import { checkApiRateLimit } from '@/lib/rate-limit';
 
-// GET /api/cases/[caseId]/documents/[documentId]/text - Get OCR text for a document
+// GET /api/cases/[caseId]/documents/[documentId]/text - Get OCR text for a document (requires authentication)
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ caseId: string; documentId: string }> }
 ) {
   try {
     const { caseId, documentId } = await params;
+
+    // Rate limit check
+    const rateLimitResponse = checkApiRateLimit(request, `docs:${caseId}:${documentId}:text`);
+    if (rateLimitResponse) {
+      return rateLimitResponse;
+    }
+
+    // Check authentication
+    const caseCheck = await db
+      .select({ passwordHash: cases.passwordHash })
+      .from(cases)
+      .where(eq(cases.id, caseId))
+      .limit(1);
+
+    if (caseCheck.length === 0) {
+      return NextResponse.json(
+        { error: 'Case not found' },
+        { status: 404 }
+      );
+    }
+
+    // Require authentication unless case is passwordless
+    if (!isPasswordlessCase(caseCheck[0].passwordHash)) {
+      const authError = await requireAuth(caseId);
+      if (authError) return authError;
+    }
 
     // Get the document to verify it exists and get the objectId
     const doc = await db

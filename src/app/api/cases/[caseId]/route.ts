@@ -1,16 +1,44 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db, cases, documents } from '@/lib/db';
 import { getCasedevClient } from '@/lib/casedev/client';
-import { eq, sql, count } from 'drizzle-orm';
+import { eq, count } from 'drizzle-orm';
 import bcrypt from 'bcryptjs';
+import { requireAuth, isPasswordlessCase } from '@/lib/auth';
+import { checkApiRateLimit } from '@/lib/rate-limit';
 
-// GET /api/cases/[caseId] - Get case details
+// GET /api/cases/[caseId] - Get case details (requires authentication)
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ caseId: string }> }
 ) {
   try {
     const { caseId } = await params;
+
+    // Rate limit check
+    const rateLimitResponse = checkApiRateLimit(request, `cases:${caseId}:get`);
+    if (rateLimitResponse) {
+      return rateLimitResponse;
+    }
+
+    // First get the case to check if it requires auth
+    const caseCheck = await db
+      .select({ passwordHash: cases.passwordHash })
+      .from(cases)
+      .where(eq(cases.id, caseId))
+      .limit(1);
+
+    if (caseCheck.length === 0) {
+      return NextResponse.json(
+        { error: 'Case not found' },
+        { status: 404 }
+      );
+    }
+
+    // Require authentication unless case is passwordless
+    if (!isPasswordlessCase(caseCheck[0].passwordHash)) {
+      const authError = await requireAuth(caseId);
+      if (authError) return authError;
+    }
 
     const caseData = await db
       .select({
@@ -52,13 +80,20 @@ export async function GET(
   }
 }
 
-// PATCH /api/cases/[caseId] - Update case (name, description, password change/removal)
+// PATCH /api/cases/[caseId] - Update case (requires authentication)
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ caseId: string }> }
 ) {
   try {
     const { caseId } = await params;
+
+    // Rate limit check
+    const rateLimitResponse = checkApiRateLimit(request, `cases:${caseId}:update`);
+    if (rateLimitResponse) {
+      return rateLimitResponse;
+    }
+
     const body = await request.json();
     const { currentPassword, newPassword, removePassword, name, description } = body;
 
@@ -76,11 +111,17 @@ export async function PATCH(
       );
     }
 
+    // Require authentication for protected cases
+    if (!isPasswordlessCase(caseData[0].passwordHash)) {
+      const authError = await requireAuth(caseId);
+      if (authError) return authError;
+    }
+
     const now = new Date();
 
-    // Handle name/description update (requires password verification)
+    // Handle name/description update (requires password verification for additional security)
     if (name !== undefined || description !== undefined) {
-      // Verify password if case has one
+      // Verify password if case has one (double-check even with cookie auth)
       if (caseData[0].passwordHash && caseData[0].passwordHash !== '') {
         if (!currentPassword) {
           return NextResponse.json(
@@ -146,7 +187,6 @@ export async function PATCH(
 
     if (removePassword) {
       // Set a default empty password hash (user won't need password to access)
-      // We use a special marker that the auth endpoint will recognize
       await db
         .update(cases)
         .set({
@@ -196,22 +236,22 @@ export async function PATCH(
   }
 }
 
-// DELETE /api/cases/[caseId] - Delete a case (requires password)
+// DELETE /api/cases/[caseId] - Delete a case (requires password verification)
 export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ caseId: string }> }
 ) {
   try {
     const { caseId } = await params;
+
+    // Rate limit check
+    const rateLimitResponse = checkApiRateLimit(request, `cases:${caseId}:delete`);
+    if (rateLimitResponse) {
+      return rateLimitResponse;
+    }
+
     const body = await request.json();
     const { password } = body;
-
-    if (!password) {
-      return NextResponse.json(
-        { error: 'Password is required to delete a case' },
-        { status: 400 }
-      );
-    }
 
     // Get the case to verify password
     const caseData = await db
@@ -227,8 +267,15 @@ export async function DELETE(
       );
     }
 
-    // Verify password (if case has a password set)
+    // For delete operations, password verification is sufficient (no cookie required)
+    // This allows deletion from the dashboard without needing to access the case first
     if (caseData[0].passwordHash && caseData[0].passwordHash !== '') {
+      if (!password) {
+        return NextResponse.json(
+          { error: 'Password is required to delete a case' },
+          { status: 400 }
+        );
+      }
       const isValid = await bcrypt.compare(password, caseData[0].passwordHash);
       if (!isValid) {
         return NextResponse.json(
@@ -244,10 +291,8 @@ export async function DELETE(
       try {
         const client = getCasedevClient();
         await client.vault.delete(vaultId);
-        console.log(`Deleted vault ${vaultId} from Case.dev`);
       } catch (vaultError) {
         // Log the error but continue with local deletion
-        // The vault may have already been deleted or may not exist
         console.error(`Failed to delete vault ${vaultId} from Case.dev:`, vaultError);
       }
     }

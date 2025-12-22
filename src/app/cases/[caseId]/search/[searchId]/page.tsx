@@ -46,15 +46,8 @@ export default function SearchResultsPage({
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    // Check authentication
-    if (typeof window !== 'undefined') {
-      const isAuthenticated = sessionStorage.getItem(`case_${caseId}`) === 'authenticated';
-      if (!isAuthenticated) {
-        router.push('/');
-        return;
-      }
-    }
     // PARALLEL: Fetch search data and documents concurrently
+    // Server-side auth via cookies will handle authentication
     Promise.all([fetchSearchData(), fetchDocuments()]);
   }, [caseId, searchId, router]);
 
@@ -72,14 +65,21 @@ export default function SearchResultsPage({
         return;
       }
       const metaData = await metaResponse.json();
-      setSearchData(metaData.search);
-
+      
       // Use cached results if available (INSTANT LOAD)
       if (metaData.cachedResults) {
         setSearchResults(metaData.cachedResults);
+        // Sync searchData.resultCount with actual cached chunks length
+        const actualResultCount = metaData.cachedResults.chunks?.length ?? 0;
+        setSearchData({
+          ...metaData.search,
+          resultCount: actualResultCount,
+        });
         setLoading(false);
         return;
       }
+      
+      setSearchData(metaData.search);
 
       // Fallback: Re-run search only if no cache exists (legacy searches)
       const searchResponse = await fetch(`/api/cases/${caseId}/search`, {
@@ -116,7 +116,7 @@ export default function SearchResultsPage({
     }
   };
 
-  // Re-run search with different threshold
+  // Re-run search with different threshold and update cache
   const handleRetryWithThreshold = async (newThreshold: number) => {
     if (!searchData) return;
     
@@ -135,8 +135,24 @@ export default function SearchResultsPage({
       if (searchResponse.ok) {
         const results = await searchResponse.json();
         setSearchResults(results);
-        // Update the displayed threshold
-        setSearchData(prev => prev ? { ...prev, relevanceThreshold: newThreshold } : null);
+        // Update the displayed threshold and result count
+        const newResultCount = results.chunks?.length || 0;
+        setSearchData(prev => prev ? { 
+          ...prev, 
+          relevanceThreshold: newThreshold,
+          resultCount: newResultCount,
+        } : null);
+        
+        // Update the cached search in the database so navigating away won't lose results
+        await fetch(`/api/cases/${caseId}/searches/${searchId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            relevanceThreshold: newThreshold,
+            resultsCache: results,
+            resultCount: newResultCount,
+          }),
+        });
       }
     } catch (err) {
       console.error('Failed to retry search:', err);
@@ -199,6 +215,14 @@ export default function SearchResultsPage({
                     <Clock className="h-3 w-3" />
                     {formatDate(searchData.searchedAt)}
                   </span>
+                  {searchResults && (
+                    <span className="font-medium text-foreground">
+                      {searchResults.chunks?.length ?? 0} result{(searchResults.chunks?.length ?? 0) !== 1 ? 's' : ''}
+                      {searchResults.totalBeforeFilter && searchResults.totalBeforeFilter > (searchResults.chunks?.length ?? 0) && (
+                        <span className="text-muted-foreground font-normal"> of {searchResults.totalBeforeFilter}</span>
+                      )}
+                    </span>
+                  )}
                   <span className="flex items-center gap-1">
                     <Filter className="h-3 w-3" />
                     {currentThreshold}% threshold

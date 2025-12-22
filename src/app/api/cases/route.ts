@@ -1,13 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db, cases, documents } from '@/lib/db';
 import { getCasedevClient } from '@/lib/casedev/client';
-import { eq, sql, count } from 'drizzle-orm';
+import { eq, count } from 'drizzle-orm';
 import bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
+import { setAuthCookie } from '@/lib/auth';
+import { checkApiRateLimit } from '@/lib/rate-limit';
 
 // GET /api/cases - List all cases
-export async function GET() {
+// Note: This endpoint lists case metadata only (names, counts)
+// Actual case content requires authentication per-case
+export async function GET(request: NextRequest) {
   try {
+    // Rate limit check
+    const rateLimitResponse = checkApiRateLimit(request, 'cases:list');
+    if (rateLimitResponse) {
+      return rateLimitResponse;
+    }
+
     // Get cases with document counts using LEFT JOIN
     const casesWithCounts = await db
       .select({
@@ -43,6 +53,12 @@ export async function GET() {
 // POST /api/cases - Create a new case
 export async function POST(request: NextRequest) {
   try {
+    // Rate limit check
+    const rateLimitResponse = checkApiRateLimit(request, 'cases:create');
+    if (rateLimitResponse) {
+      return rateLimitResponse;
+    }
+
     const body = await request.json();
     const { name, description, password } = body;
 
@@ -85,6 +101,9 @@ export async function POST(request: NextRequest) {
       createdAt: now,
       updatedAt: now,
     });
+
+    // Automatically authenticate the creator
+    await setAuthCookie(caseId);
 
     return NextResponse.json({
       case: {

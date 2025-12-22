@@ -120,22 +120,10 @@ export default function CaseDashboard({ params }: { params: Promise<{ caseId: st
   const hoverTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
-    // Check authentication
-    if (typeof window !== 'undefined') {
-      const isAuthenticated = sessionStorage.getItem(`case_${caseId}`) === 'authenticated';
-      if (!isAuthenticated) {
-        router.push('/');
-        return;
-      }
-    }
     // PARALLEL: Fetch all data concurrently for faster page load
+    // Server-side auth via cookies will redirect if not authenticated
     Promise.all([fetchCaseData(), fetchDocuments(), fetchRecentSearches(), fetchAnalysis()]);
   }, [caseId, router]);
-
-  // Handler to clear auth when navigating back to home
-  const handleBackToHome = () => {
-    sessionStorage.removeItem(`case_${caseId}`);
-  };
 
   // Poll for document status updates when there are processing documents
   // Uses exponential backoff: starts at 2s, maxes at 15s, resets on status change
@@ -528,7 +516,7 @@ export default function CaseDashboard({ params }: { params: Promise<{ caseId: st
         <div className="container mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
-              <Link href="/" onClick={handleBackToHome}>
+              <Link href="/">
                 <Button variant="ghost" size="icon">
                   <ArrowLeft className="h-4 w-4" />
                 </Button>

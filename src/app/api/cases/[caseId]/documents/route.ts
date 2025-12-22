@@ -3,6 +3,8 @@ import { db, cases, documents } from '@/lib/db';
 import { getCasedevClient } from '@/lib/casedev/client';
 import { eq, desc } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
+import { requireAuth, isPasswordlessCase } from '@/lib/auth';
+import { checkApiRateLimit, RATE_LIMIT_CONFIGS, checkRateLimit, getRateLimitIdentifier } from '@/lib/rate-limit';
 
 // Status priority - higher number = later in workflow
 // Only update local status when remote status has higher priority
@@ -100,7 +102,31 @@ async function triggerAnalysisIfNeeded(caseId: string): Promise<void> {
   analysisDebounce.set(caseId, timer);
 }
 
-// GET /api/cases/[caseId]/documents - List documents in a case
+// Helper to check auth for a case
+async function checkCaseAuth(caseId: string): Promise<NextResponse | null> {
+  const caseCheck = await db
+    .select({ passwordHash: cases.passwordHash })
+    .from(cases)
+    .where(eq(cases.id, caseId))
+    .limit(1);
+
+  if (caseCheck.length === 0) {
+    return NextResponse.json(
+      { error: 'Case not found' },
+      { status: 404 }
+    );
+  }
+
+  // Require authentication unless case is passwordless
+  if (!isPasswordlessCase(caseCheck[0].passwordHash)) {
+    const authError = await requireAuth(caseId);
+    if (authError) return authError;
+  }
+
+  return null;
+}
+
+// GET /api/cases/[caseId]/documents - List documents in a case (requires authentication)
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ caseId: string }> }
@@ -108,7 +134,17 @@ export async function GET(
   try {
     const { caseId } = await params;
 
-    // Get case to verify it exists
+    // Rate limit check
+    const rateLimitResponse = checkApiRateLimit(request, `docs:${caseId}:list`);
+    if (rateLimitResponse) {
+      return rateLimitResponse;
+    }
+
+    // Check authentication
+    const authError = await checkCaseAuth(caseId);
+    if (authError) return authError;
+
+    // Get case to get vault ID
     const caseData = await db
       .select({ vaultId: cases.vaultId })
       .from(cases)
@@ -167,7 +203,6 @@ export async function GET(
                 })
                 .where(eq(documents.id, doc.id));
               hasUpdates = true;
-              console.log(`[Sync] Updated ${doc.filename}: ${localStatus} → ${newStatus}`);
               
               // Track if any document just completed for AI analysis trigger
               if (newStatus === 'completed' && localStatus !== 'completed') {
@@ -218,13 +253,25 @@ export async function GET(
   }
 }
 
-// POST /api/cases/[caseId]/documents - Get upload URL for a new document
+// POST /api/cases/[caseId]/documents - Get upload URL for a new document (requires authentication)
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ caseId: string }> }
 ) {
   try {
     const { caseId } = await params;
+
+    // Rate limit check for uploads
+    const identifier = getRateLimitIdentifier(request, `upload:${caseId}`);
+    const rateLimitResponse = checkRateLimit(identifier, RATE_LIMIT_CONFIGS.upload);
+    if (rateLimitResponse) {
+      return rateLimitResponse;
+    }
+
+    // Check authentication
+    const authError = await checkCaseAuth(caseId);
+    if (authError) return authError;
+
     const body = await request.json();
     const { filename, contentType, sizeBytes } = body;
 
@@ -292,14 +339,25 @@ export async function POST(
   }
 }
 
-// PUT /api/cases/[caseId]/documents - Batch get upload URLs for multiple documents
-// This is more efficient than making individual POST requests for each file
+// PUT /api/cases/[caseId]/documents - Batch get upload URLs for multiple documents (requires authentication)
 export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ caseId: string }> }
 ) {
   try {
     const { caseId } = await params;
+
+    // Rate limit check for uploads
+    const identifier = getRateLimitIdentifier(request, `upload:${caseId}`);
+    const rateLimitResponse = checkRateLimit(identifier, RATE_LIMIT_CONFIGS.upload);
+    if (rateLimitResponse) {
+      return rateLimitResponse;
+    }
+
+    // Check authentication
+    const authError = await checkCaseAuth(caseId);
+    if (authError) return authError;
+
     const body = await request.json();
     const { files } = body as { 
       files: Array<{ filename: string; contentType: string; sizeBytes?: number }> 
@@ -414,13 +472,23 @@ export async function PUT(
   }
 }
 
-// PATCH /api/cases/[caseId]/documents - Retry ingestion for stuck documents
+// PATCH /api/cases/[caseId]/documents - Retry ingestion for stuck documents (requires authentication)
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ caseId: string }> }
 ) {
   try {
     const { caseId } = await params;
+
+    // Rate limit check
+    const rateLimitResponse = checkApiRateLimit(request, `docs:${caseId}:retry`);
+    if (rateLimitResponse) {
+      return rateLimitResponse;
+    }
+
+    // Check authentication
+    const authError = await checkCaseAuth(caseId);
+    if (authError) return authError;
 
     // Get case to get vault ID
     const caseData = await db
@@ -469,7 +537,6 @@ export async function PATCH(
           .where(eq(documents.id, doc.id));
         
         retriedCount++;
-        console.log(`[Retry] Triggered ingestion for ${doc.filename}`);
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : 'Unknown error';
         errors.push(`${doc.filename}: ${errorMsg}`);

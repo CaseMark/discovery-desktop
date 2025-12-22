@@ -3,17 +3,46 @@ import { db, cases, searchHistory } from '@/lib/db';
 import { getCasedevClient } from '@/lib/casedev/client';
 import { eq } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
+import { requireAuth, isPasswordlessCase } from '@/lib/auth';
+import { checkSearchRateLimit } from '@/lib/rate-limit';
 
 // Minimum relevance threshold (75%)
 const MIN_RELEVANCE = 0.75;
 
-// POST /api/cases/[caseId]/search - Search documents in a case
+// POST /api/cases/[caseId]/search - Search documents in a case (requires authentication)
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ caseId: string }> }
 ) {
   try {
     const { caseId } = await params;
+
+    // Rate limit check for searches
+    const rateLimitResponse = checkSearchRateLimit(request, caseId);
+    if (rateLimitResponse) {
+      return rateLimitResponse;
+    }
+
+    // Check authentication
+    const caseCheck = await db
+      .select({ passwordHash: cases.passwordHash })
+      .from(cases)
+      .where(eq(cases.id, caseId))
+      .limit(1);
+
+    if (caseCheck.length === 0) {
+      return NextResponse.json(
+        { error: 'Case not found' },
+        { status: 404 }
+      );
+    }
+
+    // Require authentication unless case is passwordless
+    if (!isPasswordlessCase(caseCheck[0].passwordHash)) {
+      const authError = await requireAuth(caseId);
+      if (authError) return authError;
+    }
+
     const body = await request.json();
     const { query, method = 'hybrid', topK = 50, minRelevance = MIN_RELEVANCE, skipHistory = false } = body;
 

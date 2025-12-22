@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
-import { Plus, FolderOpen, Search, FileText, Lock, Trash2, Loader2, Settings, LayoutGrid, List, Pencil, Check, X, Tag } from 'lucide-react';
+import { Plus, FolderOpen, Search, FileText, Lock, Trash2, Loader2, Settings, LayoutGrid, List, Pencil, Check, X, Tag, Upload, Sparkles, ArrowRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -118,8 +118,7 @@ export default function HomePage() {
         const data = await response.json();
         setCreateDialogOpen(false);
         setFormData({ name: '', description: '', password: '' });
-        // Store the session and redirect
-        sessionStorage.setItem(`case_${data.case.id}`, 'authenticated');
+        // Cookie is set by the server, just redirect
         window.location.href = `/cases/${data.case.id}`;
       } else {
         const data = await response.json();
@@ -145,7 +144,7 @@ export default function HomePage() {
       });
 
       if (response.ok) {
-        sessionStorage.setItem(`case_${selectedCase.id}`, 'authenticated');
+        // Cookie is set by the server, just redirect
         window.location.href = `/cases/${selectedCase.id}`;
       } else {
         setError('Invalid password');
@@ -156,11 +155,7 @@ export default function HomePage() {
   };
 
   const openAccessDialog = (caseItem: Case) => {
-    // Check if already authenticated
-    if (sessionStorage.getItem(`case_${caseItem.id}`) === 'authenticated') {
-      window.location.href = `/cases/${caseItem.id}`;
-      return;
-    }
+    // Always show password dialog - server will validate cookie if already authenticated
     setSelectedCase(caseItem);
     setAccessPassword('');
     setError('');
@@ -192,8 +187,6 @@ export default function HomePage() {
       if (response.ok) {
         // Remove from local state
         setCases(prev => prev.filter(c => c.id !== caseToDelete.id));
-        // Clear session storage for this case
-        sessionStorage.removeItem(`case_${caseToDelete.id}`);
         // Close dialog
         setDeleteDialogOpen(false);
         setCaseToDelete(null);
@@ -500,7 +493,7 @@ export default function HomePage() {
   );
 
   return (
-    <div className="min-h-screen">
+    <div className="min-h-screen flex flex-col">
       {/* Header */}
       <header className="border-b bg-card">
         <div className="container mx-auto px-4 py-4 flex items-center justify-between">
@@ -617,7 +610,24 @@ export default function HomePage() {
       </header>
 
       {/* Main Content */}
-      <main className="container mx-auto px-4 py-8">
+      <main className="container mx-auto px-4 py-8 flex-1">
+        {/* Welcome Blurb */}
+        <div className="mb-8 p-6 bg-gradient-to-br from-primary/5 via-background to-primary/5 rounded-xl border border-primary/10">
+          <div className="flex items-start gap-4">
+            <div className="p-3 bg-primary/10 rounded-lg">
+              <Sparkles className="h-6 w-6 text-primary" />
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold mb-2">Welcome to Discovery Dashboard</h2>
+              <p className="text-muted-foreground leading-relaxed">
+                Your secure workspace for managing legal discovery documents. Create password-protected cases, 
+                upload documents for AI-powered processing, and search across all your materials using natural 
+                language queries. Find relevant passages instantly with intelligent semantic search.
+              </p>
+            </div>
+          </div>
+        </div>
+
         {/* Search and View Toggle Bar */}
         {cases.length > 0 && (
           <div className="flex items-center gap-4 mb-6">
@@ -694,7 +704,55 @@ export default function HomePage() {
             {filteredCases.map(renderCaseListItem)}
           </div>
         )}
+
       </main>
+
+      {/* Workflow Guide - Fixed to Bottom */}
+      <footer className="border-t bg-muted/30 mt-auto">
+        <div className="container mx-auto px-4 py-6">
+          <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-4 text-center">
+            How It Works
+          </h3>
+          <div className="flex flex-col md:flex-row items-center justify-center gap-3 md:gap-6">
+            {/* Step 1 */}
+            <div className="flex items-center gap-3 px-4 py-3 bg-card rounded-lg border w-64">
+              <div className="flex items-center justify-center w-8 h-8 rounded-full bg-primary/10 text-primary text-sm font-bold flex-shrink-0">
+                1
+              </div>
+              <div className="flex items-center gap-2">
+                <FolderOpen className="h-4 w-4 text-primary flex-shrink-0" />
+                <span className="text-sm font-medium">Create Case</span>
+              </div>
+            </div>
+
+            <ArrowRight className="h-4 w-4 text-muted-foreground hidden md:block flex-shrink-0" />
+
+            {/* Step 2 */}
+            <div className="flex items-center gap-3 px-4 py-3 bg-card rounded-lg border w-64">
+              <div className="flex items-center justify-center w-8 h-8 rounded-full bg-primary/10 text-primary text-sm font-bold flex-shrink-0">
+                2
+              </div>
+              <div className="flex items-center gap-2">
+                <Upload className="h-4 w-4 text-primary flex-shrink-0" />
+                <span className="text-sm font-medium">Upload Documents</span>
+              </div>
+            </div>
+
+            <ArrowRight className="h-4 w-4 text-muted-foreground hidden md:block flex-shrink-0" />
+
+            {/* Step 3 */}
+            <div className="flex items-center gap-3 px-4 py-3 bg-card rounded-lg border w-64">
+              <div className="flex items-center justify-center w-8 h-8 rounded-full bg-primary/10 text-primary text-sm font-bold flex-shrink-0">
+                3
+              </div>
+              <div className="flex items-center gap-2">
+                <Search className="h-4 w-4 text-primary flex-shrink-0" />
+                <span className="text-sm font-medium">Search & Discover</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </footer>
 
       {/* Access Dialog */}
       <Dialog open={accessDialogOpen} onOpenChange={setAccessDialogOpen}>

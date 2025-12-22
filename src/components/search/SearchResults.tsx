@@ -2,7 +2,7 @@
 
 import { useState, useMemo } from 'react';
 import Link from 'next/link';
-import { FileText, Download, ChevronDown, ChevronUp, Sparkles, ExternalLink, Filter, Settings2, X } from 'lucide-react';
+import { FileText, Download, ChevronDown, ChevronUp, Sparkles, ExternalLink, Filter, Settings2, Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
@@ -12,6 +12,7 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
+  DialogFooter,
 } from '@/components/ui/dialog';
 
 interface SearchChunk {
@@ -64,6 +65,7 @@ export function SearchResults({
 }: SearchResultsProps) {
   const [expandedChunks, setExpandedChunks] = useState<Set<number>>(new Set());
   const [showThresholdOptions, setShowThresholdOptions] = useState(false);
+  const [sliderThreshold, setSliderThreshold] = useState(currentThreshold > 0 ? currentThreshold - 25 : 0);
 
   // OPTIMIZATION: Pre-compute lookup maps for O(1) access instead of O(n) find() calls
   const sourceMap = useMemo(() => 
@@ -98,19 +100,6 @@ export function SearchResults({
     return documentMap.get(objectId);
   };
 
-  const highlightQuery = (text: string) => {
-    // Simple highlighting - split query into words and highlight matches
-    const words = query.toLowerCase().split(/\s+/).filter(w => w.length > 2);
-    if (words.length === 0) return text;
-
-    let result = text;
-    words.forEach(word => {
-      const regex = new RegExp(`(${word})`, 'gi');
-      result = result.replace(regex, '<mark class="bg-yellow-200 dark:bg-yellow-800 px-0.5 rounded">$1</mark>');
-    });
-    return result;
-  };
-
   const exportResults = () => {
     const csv = [
       ['Rank', 'Score', 'Document', 'Text Excerpt', 'AI Summary'].join(','),
@@ -136,9 +125,6 @@ export function SearchResults({
     URL.revokeObjectURL(url);
   };
 
-  // Threshold options for retry
-  const thresholdOptions = [50, 25, 0].filter(t => t < currentThreshold);
-
   if (results.chunks.length === 0) {
     const hasFilteredResults = results.totalBeforeFilter && results.totalBeforeFilter > 0;
     
@@ -160,30 +146,50 @@ export function SearchResults({
         {/* Threshold adjustment prompt */}
         {hasFilteredResults && onRetryWithThreshold && (
           <Card className="max-w-md mx-auto bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800">
-            <CardContent className="p-4">
+            <CardContent className="p-5">
               <div className="flex items-center gap-2 mb-3">
                 <Settings2 className="h-4 w-4 text-amber-600" />
                 <span className="font-medium text-amber-800 dark:text-amber-200">
-                  Lower the relevance threshold?
+                  Adjust relevance threshold
                 </span>
               </div>
-              <p className="text-sm text-amber-700 dark:text-amber-300 mb-4">
-                There are {results.totalBeforeFilter} results below your current {currentThreshold}% threshold. 
-                Try a lower threshold to see more results.
+              <p className="text-sm text-amber-700 dark:text-amber-300 mb-5">
+                {results.totalBeforeFilter} results found below your current {currentThreshold}% threshold. 
+                Lower the threshold to see more results.
               </p>
-              <div className="flex flex-wrap gap-2 justify-center">
-                {thresholdOptions.map(threshold => (
-                  <Button
-                    key={threshold}
-                    variant="outline"
-                    size="sm"
-                    onClick={() => onRetryWithThreshold(threshold)}
-                    className="border-amber-300 hover:bg-amber-100 dark:border-amber-700 dark:hover:bg-amber-900"
-                  >
-                    Try {threshold}%
-                  </Button>
-                ))}
+              
+              {/* Slider */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-amber-700 dark:text-amber-300">New threshold:</span>
+                  <span className="font-bold text-amber-800 dark:text-amber-200 text-lg">{sliderThreshold}%</span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max={currentThreshold > 0 ? currentThreshold - 1 : 0}
+                  value={sliderThreshold}
+                  onChange={(e) => setSliderThreshold(parseInt(e.target.value))}
+                  className="w-full h-2 bg-amber-200 dark:bg-amber-800 rounded-lg appearance-none cursor-pointer accent-amber-600"
+                />
+                <div className="flex justify-between text-xs text-amber-600 dark:text-amber-400">
+                  <span>0% (all results)</span>
+                  <span>{currentThreshold - 1}%</span>
+                </div>
               </div>
+
+              {/* Apply Button */}
+              <Button
+                onClick={() => onRetryWithThreshold(sliderThreshold)}
+                className="w-full mt-4 bg-amber-600 hover:bg-amber-700 text-white"
+              >
+                <Check className="h-4 w-4 mr-2" />
+                Apply {sliderThreshold}% Threshold
+              </Button>
+              
+              <p className="text-xs text-center text-amber-600 dark:text-amber-400 mt-3">
+                Lower thresholds show more results but may include less relevant content.
+              </p>
             </CardContent>
           </Card>
         )}
@@ -231,7 +237,12 @@ export function SearchResults({
       </div>
 
       {/* Threshold Options Dialog */}
-      <Dialog open={showThresholdOptions} onOpenChange={setShowThresholdOptions}>
+      <Dialog open={showThresholdOptions} onOpenChange={(open) => {
+        setShowThresholdOptions(open);
+        if (open) {
+          setSliderThreshold(currentThreshold > 0 ? Math.max(0, currentThreshold - 25) : 0);
+        }
+      }}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
@@ -241,33 +252,52 @@ export function SearchResults({
             <DialogDescription>
               {results.totalBeforeFilter && results.totalBeforeFilter > results.chunks.length && (
                 <>
-                  There are {results.totalBeforeFilter - results.chunks.length} additional results below your current {currentThreshold}% threshold. 
-                  Select a lower threshold to include more results.
+                  {results.totalBeforeFilter - results.chunks.length} additional results are below your current {currentThreshold}% threshold.
                 </>
               )}
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4 pt-4">
-            <div className="flex flex-wrap gap-2 justify-center">
-              {thresholdOptions.map(threshold => (
-                <Button
-                  key={threshold}
-                  variant="outline"
-                  onClick={() => {
-                    onRetryWithThreshold?.(threshold);
-                    setShowThresholdOptions(false);
-                  }}
-                  className="border-amber-300 hover:bg-amber-100 dark:border-amber-700 dark:hover:bg-amber-900 min-w-[100px]"
-                >
-                  <Filter className="h-4 w-4 mr-2" />
-                  {threshold}% threshold
-                </Button>
-              ))}
+          
+          <div className="space-y-4 py-4">
+            {/* Slider */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-muted-foreground">New threshold:</span>
+                <span className="font-bold text-lg">{sliderThreshold}%</span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max={currentThreshold > 0 ? currentThreshold - 1 : 0}
+                value={sliderThreshold}
+                onChange={(e) => setSliderThreshold(parseInt(e.target.value))}
+                className="w-full h-2 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer accent-primary"
+              />
+              <div className="flex justify-between text-xs text-muted-foreground">
+                <span>0% (all results)</span>
+                <span>{currentThreshold - 1}%</span>
+              </div>
             </div>
+            
             <p className="text-xs text-center text-muted-foreground">
-              Lower thresholds will show more results but may include less relevant content.
+              Lower thresholds show more results but may include less relevant content.
             </p>
           </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowThresholdOptions(false)}>
+              Cancel
+            </Button>
+            <Button 
+              onClick={() => {
+                onRetryWithThreshold?.(sliderThreshold);
+                setShowThresholdOptions(false);
+              }}
+            >
+              <Check className="h-4 w-4 mr-2" />
+              Apply {sliderThreshold}%
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -314,10 +344,9 @@ export function SearchResults({
                 </div>
 
                 {/* Text Content */}
-                <div
-                  className="text-sm leading-relaxed bg-muted/30 p-3 rounded-md border-l-2 border-primary/30"
-                  dangerouslySetInnerHTML={{ __html: highlightQuery(displayText) + (chunk.text.length > 300 && !isExpanded ? '...' : '') }}
-                />
+                <div className="text-sm leading-relaxed bg-muted/30 p-3 rounded-md border-l-2 border-primary/30">
+                  {displayText}{chunk.text.length > 300 && !isExpanded ? '...' : ''}
+                </div>
 
                 {/* Expand/Collapse */}
                 {chunk.text.length > 300 && (
